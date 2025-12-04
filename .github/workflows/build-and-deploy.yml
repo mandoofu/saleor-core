@@ -1,0 +1,66 @@
+name: Build and Deploy saleor-core
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '**/*.py'
+      - 'Dockerfile'
+      - 'requirements.txt'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: ap-northeast-3
+      ECR_REPOSITORY: saleor-3tier-dev-core
+      APP_CONFIG_REPO: mandoofu/saleor-app-config  
+      IMAGE_BASE_URL: 069423016509.dkr.ecr.ap-northeast-3.amazonaws.com
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build Docker image
+        run: |
+          IMAGE_TAG=${GITHUB_SHA::7}
+          docker build -t $IMAGE_BASE_URL/$ECR_REPOSITORY:$IMAGE_TAG .
+
+      - name: Push Docker image
+        run: |
+          IMAGE_TAG=${GITHUB_SHA::7}
+          docker push $IMAGE_BASE_URL/$ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: Clone app-config repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.APP_CONFIG_REPO }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: app-config
+
+      - name: Update image tag in Kustomize patch
+        working-directory: app-config
+        run: |
+          IMAGE_TAG=${GITHUB_SHA::7}
+          FILE=overlays/dev/patches/images.yaml
+          # saleor-core 관련 이미지 라인만 교체
+          sed -i "s#\(saleor-3tier-dev-core:\).*#\1$IMAGE_TAG#g" $FILE
+
+      - name: Commit and push changes
+        working-directory: app-config
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git commit -am "chore: update saleor-core image tag"
+          git push
